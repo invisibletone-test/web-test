@@ -1,0 +1,937 @@
+import React, { useState, useEffect, useRef } from "react";
+
+const App = () => {
+  const [currentPage, setCurrentPage] = useState("landing"); // 'landing', 'registerPassenger', 'registerDriver', 'login', 'passengerDashboard', 'driverDashboard', 'activeOrders', 'profile', 'ontheway'
+  const [userType, setUserType] = useState("passenger"); // 'passenger' or 'driver'
+  const [user, setUser] = useState(null);
+  const [orders, setOrders] = useState([]);
+  const [activeOrder, setActiveOrder] = useState(null);
+  const [pickupLocation, setPickupLocation] = useState({ address: "", coords: null });
+  const [destinationLocation, setDestinationLocation] = useState({ address: "", coords: null });
+  const [scheduledTime, setScheduledTime] = useState("");
+  const [distance, setDistance] = useState(0);
+  const [price, setPrice] = useState(0);
+  const mapRef = useRef(null);
+  const pickupMarkerRef = useRef(null);
+  const destinationMarkerRef = useRef(null);
+
+  // Mock Supabase Auth & DB
+  const mockUsers = {
+    passengers: [
+      { id: 1, name: "Budi", email: "budi@example.com", phone: "628123456789", password: "123456" }
+    ],
+    drivers: [
+      { id: 1, name: "Sopir Joko", email: "joko@example.com", phone: "628987654321", nopol: "B 1234 ABC", password: "123456" }
+    ]
+  };
+
+  const calculatePrice = (km) => {
+    if (km <= 3) return 9500;
+    return 9500 + (km - 3) * 2000;
+  };
+
+  const handlePhoneInput = (value) => {
+    if (value.startsWith("0")) {
+      return "62" + value.slice(1);
+    }
+    return value;
+  };
+
+  const validateScheduleTime = (time) => {
+    const now = new Date();
+    const selected = new Date(time);
+    const diffInHours = (selected - now) / (1000 * 60 * 60);
+    return diffInHours >= 0.5 && diffInHours <= 72; // 30 menit sampai 3 hari
+  };
+
+  const simulateGeocode = (address) => {
+    // Mock geocoding — in real app, use OSM Nominatim via Supabase Edge Function
+    const coords = {
+      lat: -6.2 + Math.random() * 0.2,
+      lng: 106.8 + Math.random() * 0.2
+    };
+    return { address, coords };
+  };
+
+  const simulateDistanceCalc = (from, to) => {
+    if (!from || !to) return 0;
+    // Mock distance calculation
+    const dist = 2 + Math.random() * 10; // 2-12 km
+    return parseFloat(dist.toFixed(2));
+  };
+
+  const handleMapClick = (e, type) => {
+    const { lat, lng } = e; // simulated event
+    const reverseGeocode = `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+    if (type === "pickup") {
+      setPickupLocation({ address: reverseGeocode, coords: { lat, lng } });
+    } else {
+      setDestinationLocation({ address: reverseGeocode, coords: { lat, lng } });
+    }
+  };
+
+  const handleOrderSubmit = () => {
+    if (!pickupLocation.address || !destinationLocation.address || !scheduledTime) {
+      alert("Lengkapi semua data sebelum lanjut pemesanan.");
+      return;
+    }
+    if (!validateScheduleTime(scheduledTime)) {
+      alert("Jadwal harus antara 30 menit dari sekarang hingga maksimal 3 hari ke depan.");
+      return;
+    }
+
+    const dist = simulateDistanceCalc(pickupLocation.coords, destinationLocation.coords);
+    const totalPrice = calculatePrice(dist);
+
+    const newOrder = {
+      id: Date.now(),
+      passengerId: user?.id,
+      driverId: null,
+      pickup: pickupLocation,
+      destination: destinationLocation,
+      distance: dist,
+      price: totalPrice,
+      scheduledAt: scheduledTime,
+      status: "pending",
+      createdAt: new Date().toISOString()
+    };
+
+    setOrders(prev => [...prev, newOrder]);
+    setCurrentPage("activeOrders");
+    setActiveOrder(newOrder);
+  };
+
+  const acceptOrder = (orderId) => {
+    setOrders(prev => 
+      prev.map(order => 
+        order.id === orderId ? { ...order, driverId: user.id, status: "accepted" } : order
+      )
+    );
+    setActiveOrder(prev => ({ ...prev, driverId: user.id, status: "accepted" }));
+    setCurrentPage("ontheway");
+  };
+
+  const cancelOrder = (orderId) => {
+    setOrders(prev => prev.filter(order => order.id !== orderId));
+    setActiveOrder(null);
+    setCurrentPage(userType === "passenger" ? "passengerDashboard" : "driverDashboard");
+  };
+
+  const completeOrder = () => {
+    // In real app: mark as completed and schedule cleanup at midnight
+    setActiveOrder(null);
+    setOrders(prev => prev.filter(order => order.id !== activeOrder.id));
+    setCurrentPage(userType === "passenger" ? "passengerDashboard" : "driverDashboard");
+  };
+
+  const handleLogin = (email, password, type) => {
+    const db = type === "passenger" ? mockUsers.passengers : mockUsers.drivers;
+    const foundUser = db.find(u => u.email === email && u.password === password);
+    if (foundUser) {
+      setUser({ ...foundUser, type });
+      setUserType(type);
+      setCurrentPage(type === "passenger" ? "passengerDashboard" : "driverDashboard");
+    } else {
+      alert("Email atau password salah.");
+    }
+  };
+
+  const handleRegister = (data, type) => {
+    const db = type === "passenger" ? mockUsers.passengers : mockUsers.drivers;
+    if (db.some(u => u.email === data.email || u.phone === data.phone)) {
+      alert("Data ini sudah terdaftar. Silakan login atau gunakan data lain.");
+      return;
+    }
+    const newUser = { id: Date.now(), ...data };
+    if (type === "passenger") {
+      mockUsers.passengers.push(newUser);
+    } else {
+      mockUsers.drivers.push(newUser);
+    }
+    alert("Registrasi berhasil! Silakan login.");
+    setCurrentPage("login");
+  };
+
+  const renderLanding = () => (
+    <div className="min-h-screen bg-black text-white flex flex-col items-center justify-center p-6">
+      <h1 className="text-3xl font-bold mb-2">Bang OJAD</h1>
+      <p className="text-purple-400 mb-8">Ojek Jadwal Lokal Alternatif</p>
+      <button 
+        onClick={() => setCurrentPage("registerPassenger")}
+        className="w-full py-4 bg-purple-600 rounded-lg text-lg font-semibold mb-4"
+      >
+        Daftar sebagai Penumpang
+      </button>
+      <button 
+        onClick={() => setCurrentPage("login")}
+        className="w-full py-4 bg-gray-800 rounded-lg text-lg font-semibold mb-4"
+      >
+        Login
+      </button>
+      <button 
+        onClick={() => setCurrentPage("registerDriver")}
+        className="w-full py-3 bg-gray-700 rounded-lg text-sm mt-auto"
+      >
+        Daftar sebagai Driver (di bawah)
+      </button>
+    </div>
+  );
+
+  const renderRegisterForm = (type) => {
+    const [formData, setFormData] = useState({ 
+      name: "", 
+      email: "", 
+      phone: "", 
+      password: "",
+      nopol: type === "driver" ? "" : undefined
+    });
+
+    const handleSubmit = (e) => {
+      e.preventDefault();
+      if (type === "driver" && !formData.nopol) {
+        alert("Nomor kendaraan wajib diisi.");
+        return;
+      }
+      const processedData = {
+        ...formData,
+        phone: handlePhoneInput(formData.phone)
+      };
+      handleRegister(processedData, type);
+    };
+
+    return (
+      <div className="min-h-screen bg-black text-white p-6">
+        <h1 className="text-2xl font-bold mb-2">Bang OJAD</h1>
+        <p className="text-purple-400 mb-6">Daftar sebagai {type === "passenger" ? "Penumpang" : "Driver"}</p>
+        
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <input 
+            type="text" 
+            placeholder="Nama Lengkap" 
+            value={formData.name}
+            onChange={(e) => setFormData({...formData, name: e.target.value})}
+            className="w-full p-3 bg-gray-900 rounded border border-gray-700"
+            required
+          />
+          
+          {type === "driver" && (
+            <input 
+              type="text" 
+              placeholder="Nomor Kendaraan (NOPOL)" 
+              value={formData.nopol}
+              onChange={(e) => setFormData({...formData, nopol: e.target.value})}
+              className="w-full p-3 bg-gray-900 rounded border border-gray-700"
+              required
+            />
+          )}
+          
+          <input 
+            type="email" 
+            placeholder="Email Aktif" 
+            value={formData.email}
+            onChange={(e) => setFormData({...formData, email: e.target.value})}
+            className="w-full p-3 bg-gray-900 rounded border border-gray-700"
+            required
+          />
+          
+          <div className="relative">
+            <input 
+              type="tel" 
+              placeholder="Nomor Telepon (WhatsApp)" 
+              value={formData.phone}
+              onChange={(e) => setFormData({...formData, phone: e.target.value})}
+              className="w-full p-3 bg-gray-900 rounded border border-gray-700"
+              required
+            />
+          </div>
+          
+          <div className="relative">
+            <input 
+              type="password" 
+              placeholder="Kata Sandi" 
+              value={formData.password}
+              onChange={(e) => setFormData({...formData, password: e.target.value})}
+              className="w-full p-3 bg-gray-900 rounded border border-gray-700"
+              required
+            />
+          </div>
+          
+          <button 
+            type="submit"
+            className="w-full py-4 bg-purple-600 rounded-lg font-semibold mt-6"
+          >
+            Daftar
+          </button>
+        </form>
+        
+        <button 
+          onClick={() => setCurrentPage("landing")}
+          className="w-full py-3 bg-gray-800 rounded-lg text-sm mt-4"
+        >
+          Kembali
+        </button>
+      </div>
+    );
+  };
+
+  const renderLoginForm = () => {
+    const [email, setEmail] = useState("");
+    const [password, setPassword] = useState("");
+    const [showPassword, setShowPassword] = useState(false);
+
+    return (
+      <div className="min-h-screen bg-black text-white p-6">
+        <h1 className="text-2xl font-bold mb-2">Bang OJAD</h1>
+        <p className="text-purple-400 mb-6">Login</p>
+        
+        <div className="flex mb-6 bg-gray-900 p-1 rounded-lg">
+          <button 
+            onClick={() => setUserType("passenger")}
+            className={`flex-1 py-3 ${userType === "passenger" ? "bg-purple-600" : ""} rounded`}
+          >
+            Penumpang
+          </button>
+          <button 
+            onClick={() => setUserType("driver")}
+            className={`flex-1 py-3 ${userType === "driver" ? "bg-purple-600" : ""} rounded`}
+          >
+            Driver
+          </button>
+        </div>
+        
+        <div className="space-y-4">
+          <input 
+            type="email" 
+            placeholder="Email" 
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            className="w-full p-3 bg-gray-900 rounded border border-gray-700"
+            required
+          />
+          
+          <div className="relative">
+            <input 
+              type={showPassword ? "text" : "password"} 
+              placeholder="Kata Sandi" 
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="w-full p-3 bg-gray-900 rounded border border-gray-700"
+              required
+            />
+            <button 
+              type="button"
+              onClick={() => setShowPassword(!showPassword)}
+              className="absolute right-3 top-3 text-gray-400"
+            >
+              👁️
+            </button>
+          </div>
+          
+          <button 
+            onClick={() => handleLogin(email, password, userType)}
+            className="w-full py-4 bg-purple-600 rounded-lg font-semibold"
+          >
+            Login
+          </button>
+          
+          <button 
+            onClick={() => alert("Fitur lupa kata sandi akan mengirim email reset via Supabase.")}
+            className="w-full text-purple-400 text-sm py-2"
+          >
+            Lupa Kata Sandi?
+          </button>
+        </div>
+        
+        <button 
+          onClick={() => setCurrentPage("landing")}
+          className="w-full py-3 bg-gray-800 rounded-lg text-sm mt-6"
+        >
+          Kembali
+        </button>
+      </div>
+    );
+  };
+
+  const renderPassengerDashboard = () => (
+    <div className="min-h-screen bg-black text-white flex flex-col">
+      {/* Header */}
+      <div className="bg-gray-900 p-4 sticky top-0 z-10">
+        <h1 className="text-xl font-bold">Bang OJAD</h1>
+        <p className="text-purple-400 text-sm">Ojek Jadwal Lokal Alternatif</p>
+      </div>
+      
+      {/* Scrollable Content */}
+      <div className="flex-1 p-4 space-y-4 overflow-y-auto">
+        <h2 className="text-lg font-semibold mb-4">Buat Pesanan Baru</h2>
+        
+        <div className="bg-gray-900 p-4 rounded-lg">
+          <h3 className="font-medium mb-2">Lokasi Penjemputan</h3>
+          <input 
+            type="text" 
+            placeholder="Ketik alamat atau pilih di peta"
+            value={pickupLocation.address}
+            onChange={(e) => setPickupLocation({ ...pickupLocation, address: e.target.value })}
+            className="w-full p-3 bg-gray-800 rounded mb-2"
+          />
+        </div>
+        
+        <div className="bg-gray-900 p-4 rounded-lg">
+          <h3 className="font-medium mb-2">Tujuan</h3>
+          <input 
+            type="text" 
+            placeholder="Ketik alamat atau pilih di peta"
+            value={destinationLocation.address}
+            onChange={(e) => setDestinationLocation({ ...destinationLocation, address: e.target.value })}
+            className="w-full p-3 bg-gray-800 rounded mb-2"
+          />
+        </div>
+        
+        <div className="bg-gray-900 p-4 rounded-lg">
+          <h3 className="font-medium mb-2">Jadwal Penjemputan</h3>
+          <input 
+            type="datetime-local" 
+            value={scheduledTime}
+            onChange={(e) => setScheduledTime(e.target.value)}
+            className="w-full p-3 bg-gray-800 rounded"
+            min={new Date(Date.now() + 30*60000).toISOString().slice(0,16)}
+            max={new Date(Date.now() + 3*24*60*60000).toISOString().slice(0,16)}
+          />
+        </div>
+        
+        {distance > 0 && (
+          <div className="bg-purple-900 p-4 rounded-lg">
+            <p>Jarak: {distance} km</p>
+            <p className="text-xl font-bold">Tarif: Rp {price.toLocaleString()}</p>
+          </div>
+        )}
+        
+        <button 
+          onClick={() => {
+            if (pickupLocation.address && destinationLocation.address) {
+              const dist = simulateDistanceCalc(pickupLocation.coords, destinationLocation.coords);
+              const totalPrice = calculatePrice(dist);
+              setDistance(dist);
+              setPrice(totalPrice);
+            }
+          }}
+          className="w-full py-3 bg-purple-600 rounded-lg font-semibold"
+        >
+          Hitung Tarif
+        </button>
+        
+        <button 
+          onClick={handleOrderSubmit}
+          className="w-full py-4 bg-green-600 rounded-lg font-semibold"
+        >
+          Buat Pesanan
+        </button>
+      </div>
+      
+      {/* Bottom Navigation */}
+      <div className="bg-gray-900 p-2 flex justify-around sticky bottom-0">
+        <button 
+          onClick={() => setCurrentPage("passengerDashboard")}
+          className="flex flex-col items-center py-2 text-purple-400"
+        >
+          <div>🚖</div>
+          <div className="text-xs">Pesan</div>
+        </button>
+        <button 
+          onClick={() => setCurrentPage("activeOrders")}
+          className="flex flex-col items-center py-2"
+        >
+          <div>⏱️</div>
+          <div className="text-xs">Aktif</div>
+        </button>
+        <button 
+          onClick={() => setCurrentPage("profile")}
+          className="flex flex-col items-center py-2"
+        >
+          <div>👤</div>
+          <div className="text-xs">Profil</div>
+        </button>
+      </div>
+    </div>
+  );
+
+  const renderDriverDashboard = () => {
+    const availableOrders = orders.filter(order => order.status === "pending");
+
+    return (
+      <div className="min-h-screen bg-black text-white flex flex-col">
+        {/* Header */}
+        <div className="bg-gray-900 p-4 sticky top-0 z-10">
+          <h1 className="text-xl font-bold">Bang OJAD</h1>
+          <p className="text-purple-400 text-sm">Ojek Jadwal Lokal Alternatif</p>
+        </div>
+        
+        {/* Scrollable Content */}
+        <div className="flex-1 p-4 space-y-4 overflow-y-auto">
+          <button 
+            onClick={() => setCurrentPage("profile")}
+            className="w-full py-3 bg-gray-800 rounded-lg mb-4 text-left px-4"
+          >
+            👤 Profil Saya
+          </button>
+          
+          <h2 className="text-lg font-semibold mb-4">Pesanan Tersedia</h2>
+          
+          {availableOrders.length === 0 ? (
+            <div className="bg-gray-900 p-4 rounded-lg text-center">
+              Tidak ada pesanan tersedia saat ini.
+            </div>
+          ) : (
+            availableOrders.map(order => (
+              <div key={order.id} className="bg-gray-900 p-4 rounded-lg mb-4">
+                <p className="font-medium">⏰ {new Date(order.scheduledAt).toLocaleString()}</p>
+                <p className="text-sm">📍 {order.pickup.address}</p>
+                <p className="text-sm">➡️ {order.destination.address}</p>
+                <p className="font-bold text-purple-400">Rp {order.price.toLocaleString()}</p>
+                <button 
+                  onClick={() => acceptOrder(order.id)}
+                  className="w-full py-2 bg-green-600 rounded-lg mt-3 font-semibold"
+                >
+                  Terima Pesanan
+                </button>
+              </div>
+            ))
+          )}
+          
+          {activeOrder && activeOrder.status === "accepted" && (
+            <div className="bg-purple-900 p-4 rounded-lg">
+              <h3 className="font-bold">Pesanan Diterima!</h3>
+              <button 
+                onClick={() => setCurrentPage("ontheway")}
+                className="w-full py-2 bg-blue-600 rounded-lg mt-3"
+              >
+                Lihat Navigasi
+              </button>
+            </div>
+          )}
+        </div>
+        
+        {/* Bottom Navigation */}
+        <div className="bg-gray-900 p-2 flex justify-around sticky bottom-0">
+          <button 
+            onClick={() => setCurrentPage("profile")}
+            className="flex flex-col items-center py-2"
+          >
+            <div>👤</div>
+            <div className="text-xs">Profil</div>
+          </button>
+          <button 
+            onClick={() => setCurrentPage("driverDashboard")}
+            className="flex flex-col items-center py-2 text-purple-400"
+          >
+            <div>📋</div>
+            <div className="text-xs">Order</div>
+          </button>
+          <button 
+            onClick={() => setCurrentPage("ontheway")}
+            className="flex flex-col items-center py-2"
+          >
+            <div>🚀</div>
+            <div className="text-xs">OnTheWay</div>
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  const renderActiveOrders = () => {
+    const userOrders = userType === "passenger" 
+      ? orders.filter(order => order.passengerId === user?.id && order.status !== "canceled" && order.status !== "completed")
+      : orders.filter(order => order.driverId === user?.id && order.status !== "canceled" && order.status !== "completed");
+
+    return (
+      <div className="min-h-screen bg-black text-white flex flex-col">
+        <div className="bg-gray-900 p-4 sticky top-0 z-10">
+          <h1 className="text-xl font-bold">Order Aktif</h1>
+          <p className="text-purple-400 text-sm">Bang OJAD</p>
+        </div>
+        
+        <div className="flex-1 p-4 space-y-4 overflow-y-auto">
+          {userOrders.length === 0 ? (
+            <div className="text-center py-8">
+              Tidak ada order aktif.
+            </div>
+          ) : (
+            userOrders.map(order => (
+              <div key={order.id} className="bg-gray-900 p-4 rounded-lg">
+                <p className="font-medium">⏰ {new Date(order.scheduledAt).toLocaleString()}</p>
+                <p className="text-sm">📍 {order.pickup.address.substring(0, 30)}...</p>
+                <p className="text-sm">➡️ {order.destination.address.substring(0, 30)}...</p>
+                {userType === "passenger" && order.driverId && (
+                  <>
+                    <p className="mt-2">👨‍✈️ Driver: {mockUsers.drivers.find(d => d.id === order.driverId)?.name}</p>
+                    <p>🚗 NOPOL: {mockUsers.drivers.find(d => d.id === order.driverId)?.nopol}</p>
+                    <a 
+                      href={`https://wa.me/${mockUsers.drivers.find(d => d.id === order.driverId)?.phone}`}
+                      className="block w-full py-2 bg-green-600 rounded-lg mt-3 text-center"
+                    >
+                      📞 Hubungi Driver
+                    </a>
+                  </>
+                )}
+                {userType === "driver" && (
+                  <>
+                    <p className="mt-2">👤 Penumpang: {mockUsers.passengers.find(p => p.id === order.passengerId)?.name}</p>
+                    <a 
+                      href={`https://wa.me/${mockUsers.passengers.find(p => p.id === order.passengerId)?.phone}`}
+                      className="block w-full py-2 bg-green-600 rounded-lg mt-3 text-center"
+                    >
+                      📞 Hubungi Penumpang
+                    </a>
+                  </>
+                )}
+                <button 
+                  onClick={() => cancelOrder(order.id)}
+                  className="w-full py-2 bg-red-600 rounded-lg mt-3"
+                >
+                  ❌ Batalkan Order
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+        
+        <div className="bg-gray-900 p-2 flex justify-around sticky bottom-0">
+          {userType === "passenger" ? (
+            <>
+              <button 
+                onClick={() => setCurrentPage("passengerDashboard")}
+                className="flex flex-col items-center py-2"
+              >
+                <div>🚖</div>
+                <div className="text-xs">Pesan</div>
+              </button>
+              <button 
+                onClick={() => setCurrentPage("activeOrders")}
+                className="flex flex-col items-center py-2 text-purple-400"
+              >
+                <div>⏱️</div>
+                <div className="text-xs">Aktif</div>
+              </button>
+              <button 
+                onClick={() => setCurrentPage("profile")}
+                className="flex flex-col items-center py-2"
+              >
+                <div>👤</div>
+                <div className="text-xs">Profil</div>
+              </button>
+            </>
+          ) : (
+            <>
+              <button 
+                onClick={() => setCurrentPage("profile")}
+                className="flex flex-col items-center py-2"
+              >
+                <div>👤</div>
+                <div className="text-xs">Profil</div>
+              </button>
+              <button 
+                onClick={() => setCurrentPage("driverDashboard")}
+                className="flex flex-col items-center py-2 text-purple-400"
+              >
+                <div>📋</div>
+                <div className="text-xs">Order</div>
+              </button>
+              <button 
+                onClick={() => setCurrentPage("ontheway")}
+                className="flex flex-col items-center py-2"
+              >
+                <div>🚀</div>
+                <div className="text-xs">OnTheWay</div>
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const renderOnTheWay = () => {
+    if (!activeOrder) return null;
+
+    const passenger = mockUsers.passengers.find(p => p.id === activeOrder.passengerId);
+    const driver = mockUsers.drivers.find(d => d.id === activeOrder.driverId);
+
+    return (
+      <div className="min-h-screen bg-black text-white flex flex-col">
+        <div className="bg-gray-900 p-4 sticky top-0 z-10">
+          <h1 className="text-xl font-bold">On The Way</h1>
+          <p className="text-purple-400 text-sm">Bang OJAD</p>
+        </div>
+        
+        <div className="flex-1 p-4 space-y-4 overflow-y-auto">
+          <div className="bg-gray-900 p-4 rounded-lg">
+            <h3 className="font-bold mb-2">Detail Perjalanan</h3>
+            <p>⏰ Jadwal: {new Date(activeOrder.scheduledAt).toLocaleString()}</p>
+            <p>💰 Tarif: Rp {activeOrder.price.toLocaleString()}</p>
+            <p>📏 Jarak: {activeOrder.distance} km</p>
+          </div>
+          
+          {userType === "driver" && (
+            <>
+              <div className="bg-gray-900 p-4 rounded-lg">
+                <h3 className="font-bold mb-2">Penumpang</h3>
+                <p>👤 {passenger?.name}</p>
+                <a 
+                  href={`https://wa.me/${passenger?.phone}`}
+                  className="block w-full py-2 bg-green-600 rounded-lg mt-2 text-center"
+                >
+                  📞 WhatsApp Penumpang
+                </a>
+              </div>
+              
+              <div className="bg-gray-900 p-4 rounded-lg space-y-3">
+                <a 
+                  href={`https://www.google.com/maps/dir/?api=1&destination=${activeOrder.pickup.coords.lat},${activeOrder.pickup.coords.lng}`}
+                  className="block w-full py-3 bg-blue-600 rounded-lg text-center"
+                >
+                  🗺️ Navigasi ke Penjemputan
+                </a>
+                <a 
+                  href={`https://www.google.com/maps/dir/?api=1&destination=${activeOrder.destination.coords.lat},${activeOrder.destination.coords.lng}`}
+                  className="block w-full py-3 bg-blue-600 rounded-lg text-center"
+                >
+                  🗺️ Navigasi ke Tujuan
+                </a>
+              </div>
+              
+              <div className="flex space-x-2">
+                <button 
+                  onClick={() => cancelOrder(activeOrder.id)}
+                  className="flex-1 py-3 bg-red-600 rounded-lg"
+                >
+                  ❌ Batalkan
+                </button>
+                <button 
+                  onClick={completeOrder}
+                  className="flex-1 py-3 bg-green-600 rounded-lg"
+                >
+                  ✅ Selesaikan
+                </button>
+              </div>
+            </>
+          )}
+          
+          {userType === "passenger" && driver && (
+            <>
+              <div className="bg-gray-900 p-4 rounded-lg">
+                <h3 className="font-bold mb-2">Driver Anda</h3>
+                <p>👨‍✈️ {driver.name}</p>
+                <p>🚗 {driver.nopol}</p>
+                <a 
+                  href={`https://wa.me/${driver.phone}`}
+                  className="block w-full py-2 bg-green-600 rounded-lg mt-2 text-center"
+                >
+                  📞 WhatsApp Driver
+                </a>
+              </div>
+            </>
+          )}
+        </div>
+        
+        <div className="bg-gray-900 p-2 flex justify-around sticky bottom-0">
+          {userType === "passenger" ? (
+            <>
+              <button 
+                onClick={() => setCurrentPage("passengerDashboard")}
+                className="flex flex-col items-center py-2"
+              >
+                <div>🚖</div>
+                <div className="text-xs">Pesan</div>
+              </button>
+              <button 
+                onClick={() => setCurrentPage("activeOrders")}
+                className="flex flex-col items-center py-2 text-purple-400"
+              >
+                <div>⏱️</div>
+                <div className="text-xs">Aktif</div>
+              </button>
+              <button 
+                onClick={() => setCurrentPage("profile")}
+                className="flex flex-col items-center py-2"
+              >
+                <div>👤</div>
+                <div className="text-xs">Profil</div>
+              </button>
+            </>
+          ) : (
+            <>
+              <button 
+                onClick={() => setCurrentPage("profile")}
+                className="flex flex-col items-center py-2"
+              >
+                <div>👤</div>
+                <div className="text-xs">Profil</div>
+              </button>
+              <button 
+                onClick={() => setCurrentPage("driverDashboard")}
+                className="flex flex-col items-center py-2"
+              >
+                <div>📋</div>
+                <div className="text-xs">Order</div>
+              </button>
+              <button 
+                onClick={() => setCurrentPage("ontheway")}
+                className="flex flex-col items-center py-2 text-purple-400"
+              >
+                <div>🚀</div>
+                <div className="text-xs">OnTheWay</div>
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const renderProfile = () => {
+    if (!user) return null;
+    
+    const [profileData, setProfileData] = useState({
+      name: user.name,
+      phone: user.phone,
+      nopol: user.nopol || ""
+    });
+
+    const handleSave = () => {
+      // In real app: update via Supabase
+      alert("Profil berhasil diperbarui!");
+    };
+
+    return (
+      <div className="min-h-screen bg-black text-white flex flex-col">
+        <div className="bg-gray-900 p-4 sticky top-0 z-10">
+          <h1 className="text-xl font-bold">Profil</h1>
+          <p className="text-purple-400 text-sm">Bang OJAD</p>
+        </div>
+        
+        <div className="flex-1 p-4 space-y-4 overflow-y-auto">
+          <div className="bg-gray-900 p-4 rounded-lg">
+            <h3 className="font-bold mb-4">Data Profil</h3>
+            
+            <div className="mb-4">
+              <label className="block text-sm mb-1">Email (tidak bisa diubah)</label>
+              <input 
+                type="email" 
+                value={user.email}
+                disabled
+                className="w-full p-3 bg-gray-800 rounded border border-gray-700"
+              />
+            </div>
+            
+            <div className="mb-4">
+              <label className="block text-sm mb-1">Nama Lengkap</label>
+              <input 
+                type="text" 
+                value={profileData.name}
+                onChange={(e) => setProfileData({...profileData, name: e.target.value})}
+                className="w-full p-3 bg-gray-800 rounded border border-gray-700"
+              />
+            </div>
+            
+            <div className="mb-4">
+              <label className="block text-sm mb-1">Nomor Telepon (WhatsApp)</label>
+              <input 
+                type="tel" 
+                value={profileData.phone}
+                onChange={(e) => setProfileData({...profileData, phone: e.target.value})}
+                className="w-full p-3 bg-gray-800 rounded border border-gray-700"
+              />
+            </div>
+            
+            {userType === "driver" && (
+              <div className="mb-4">
+                <label className="block text-sm mb-1">Nomor Kendaraan (NOPOL)</label>
+                <input 
+                  type="text" 
+                  value={profileData.nopol}
+                  onChange={(e) => setProfileData({...profileData, nopol: e.target.value})}
+                  className="w-full p-3 bg-gray-800 rounded border border-gray-700"
+                />
+              </div>
+            )}
+            
+            <button 
+              onClick={handleSave}
+              className="w-full py-3 bg-purple-600 rounded-lg font-semibold"
+            >
+              Simpan Perubahan
+            </button>
+          </div>
+        </div>
+        
+        <div className="bg-gray-900 p-2 flex justify-around sticky bottom-0">
+          {userType === "passenger" ? (
+            <>
+              <button 
+                onClick={() => setCurrentPage("passengerDashboard")}
+                className="flex flex-col items-center py-2"
+              >
+                <div>🚖</div>
+                <div className="text-xs">Pesan</div>
+              </button>
+              <button 
+                onClick={() => setCurrentPage("activeOrders")}
+                className="flex flex-col items-center py-2"
+              >
+                <div>⏱️</div>
+                <div className="text-xs">Aktif</div>
+              </button>
+              <button 
+                onClick={() => setCurrentPage("profile")}
+                className="flex flex-col items-center py-2 text-purple-400"
+              >
+                <div>👤</div>
+                <div className="text-xs">Profil</div>
+              </button>
+            </>
+          ) : (
+            <>
+              <button 
+                onClick={() => setCurrentPage("profile")}
+                className="flex flex-col items-center py-2 text-purple-400"
+              >
+                <div>👤</div>
+                <div className="text-xs">Profil</div>
+              </button>
+              <button 
+                onClick={() => setCurrentPage("driverDashboard")}
+                className="flex flex-col items-center py-2"
+              >
+                <div>📋</div>
+                <div className="text-xs">Order</div>
+              </button>
+              <button 
+                onClick={() => setCurrentPage("ontheway")}
+                className="flex flex-col items-center py-2"
+              >
+                <div>🚀</div>
+                <div className="text-xs">OnTheWay</div>
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="font-sans">
+      {currentPage === "landing" && renderLanding()}
+      {currentPage === "registerPassenger" && renderRegisterForm("passenger")}
+      {currentPage === "registerDriver" && renderRegisterForm("driver")}
+      {currentPage === "login" && renderLoginForm()}
+      {currentPage === "passengerDashboard" && renderPassengerDashboard()}
+      {currentPage === "driverDashboard" && renderDriverDashboard()}
+      {currentPage === "activeOrders" && renderActiveOrders()}
+      {currentPage === "ontheway" && renderOnTheWay()}
+      {currentPage === "profile" && renderProfile()}
+    </div>
+  );
+};
+
+export default App;
